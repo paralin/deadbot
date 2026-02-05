@@ -62,7 +62,6 @@ ABILITY_ACTIVATION_MAP = {
     'CITADEL_ABILITY_ACTIVATION_PASSIVE': 'Passive',
     'CITADEL_ABILITY_ACTIVATION_PRESS_TOGGLE': 'Toggle',
     'CITADEL_ABILITY_ACTIVATION_PRESS': 'Press',
-    'CITADEL_ABILITY_ACTIVATION_INSTANT_CAST_TOGGLE': 'InstantCastToggle',
     'CITADEL_ABILITY_ACTIVATION_ON_BUTTON_RELEASE': 'OnRelease',
 }
 
@@ -183,6 +182,7 @@ SCALE_TYPE_MAP = {
     'ELevelUpBoons': 'power_increase',
     'ELightMeleeDamage': 'melee',
     'EMaxChargesIncrease': 'max_charges',
+    'EParryCooldown': 'parry_cd',
     'EStatsCount': 'stats_count',
     'ETechCooldown': 'cooldown',
     'ETechDuration': 'duration',
