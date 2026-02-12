@@ -11,6 +11,11 @@ class HeroParser:
         self.parsed_abilities = parsed_abilities
         self.localizations = localizations
 
+        # Manually add localization for transformed Silver
+        base_name = self.localizations.get('hero_werewolf')
+        if base_name:
+            self.localizations['hero_werewolf_transformed'] = f'{base_name} (Transformed)'
+
         # Ability 4 on werewolf changes abilities 1, 2 and 3. So we will instead create a duplicate hero with its own key
         # in order to maintain the format of a hero having 4 abilities
         self.hero_data['hero_werewolf_transformed'] = self._create_werewolf_transformed()
@@ -40,9 +45,16 @@ class HeroParser:
                 # Change formatting on some numbers to match whats shown in game
                 hero_stats['StaminaCooldown'] = 1 / hero_stats['StaminaRegenPerSecond']
 
+                # Calculate dash speeds (distance / duration)
+                if 'GroundDashDistanceInMeters' in hero_stats and 'GroundDashDuration' in hero_stats:
+                    hero_stats['GroundDashSpeed'] = round_sig_figs(hero_stats['GroundDashDistanceInMeters'] / hero_stats['GroundDashDuration'], 3)
+
+                if 'AirDashDistanceInMeters' in hero_stats and 'AirDashDuration' in hero_stats:
+                    hero_stats['AirDashSpeed'] = round_sig_figs(hero_stats['AirDashDistanceInMeters'] / hero_stats['AirDashDuration'], 3)
+
                 # Convert scale values to percentages and rename keys for clarity
                 received_scale = hero_stats.pop('CritDamageReceivedScale')
-                hero_stats['CritDamageReceivedPercent'] = round_sig_figs((received_scale - 1) * 100, 5)
+                hero_stats['CritDamageReceivedPercent'] = round_sig_figs((1 - received_scale) * 100, 5)
 
                 bonus_scale = hero_stats.pop('CritDamageBonusScale')
                 hero_stats['CritDamageBonusPercent'] = round_sig_figs((bonus_scale - 1) * 100, 5)
@@ -116,6 +128,20 @@ class HeroParser:
         """Create a copy hero_werewolf data and modify its bound abilities to use the transformed abilities and weapon"""
         werewolf: dict = self.hero_data['hero_werewolf']
         werewolf_transformed: dict = copy.deepcopy(werewolf)
+
+        # Werewolf claws use alt-fire scaling as their base bullet damage modifier
+        if 'm_mapStandardLevelUpUpgrades' in werewolf_transformed:
+            upgrades = werewolf_transformed['m_mapStandardLevelUpUpgrades']
+            if 'MODIFIER_VALUE_BASE_BULLET_DAMAGE_FROM_LEVEL_ALT_FIRE' in upgrades:
+                # Werewolf claws use alt-fire scaling as their primary damage scaling
+                upgrades['MODIFIER_VALUE_BASE_BULLET_DAMAGE_FROM_LEVEL'] = upgrades['MODIFIER_VALUE_BASE_BULLET_DAMAGE_FROM_LEVEL_ALT_FIRE']
+                # Remove the alt-fire key to keep the data clean
+                del upgrades['MODIFIER_VALUE_BASE_BULLET_DAMAGE_FROM_LEVEL_ALT_FIRE']
+
+        # Treat claws as having no ammo limit (continuous attacks during transformation)
+        claws_id = 'citadel_weapon_werewolf_claws'
+        if claws_id in self.abilities_data and 'm_WeaponInfo' in self.abilities_data[claws_id]:
+            self.abilities_data[claws_id]['m_WeaponInfo']['m_iClipSize'] = 0
 
         transformation_ability = self.abilities_data['ability_werewolf_transformation']
         modifier = transformation_ability['m_WerewolfModifier']
