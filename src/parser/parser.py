@@ -1,15 +1,19 @@
 import os
 import shutil
+
 from .parsers import (
     abilities,
     ability_cards,
     items,
+    item_cards,
     heroes,
     localizations,
     attributes,
+    resource_lookup,
     souls,
     generics,
     npc_units,
+    game_map,
 )
 from utils import json_utils
 from loguru import logger
@@ -21,17 +25,24 @@ class Parser:
         self,
         work_dir,
         output_dir,
+        game_dir,
         language='english',
         english_only=False,
+        parse_map=False,
+        entity_helper_cmd=None,
     ):
         # constants
         self.OUTPUT_DIR = output_dir
         # Directory with decompiled data
         self.DATA_DIR = work_dir
+        # Game depot directory
+        self.game_dir = game_dir
 
         self.language = language
         self.data = {'scripts': {}}
         self.localization_groups = self._get_localization_groups()
+        self.parse_map = parse_map
+        self.entity_helper_cmd = entity_helper_cmd
 
         if english_only:
             self.languages = ['english']
@@ -129,12 +140,15 @@ class Parser:
         parsed_abilities = self._parse_abilities()
         parsed_heroes = self._parse_heroes(parsed_abilities)
         self._parsed_ability_cards(parsed_heroes)
-        self._parse_items()
+        parsed_items = self._parse_items()
+        self._parse_item_cards(parsed_items)
+        self._generate_resource_lookup(parsed_heroes, parsed_abilities, parsed_items)
         self._parse_npcs(parsed_abilities)
         self._parse_attributes()
         self._parse_localizations()
         self._parse_soul_unlocks()
         self._parse_generics()
+        self._parse_map()
         logger.trace('Done parsing')
 
     def _parse_soul_unlocks(self):
@@ -246,6 +260,11 @@ class Parser:
 
         with open(self.OUTPUT_DIR + '/item-component-tree.txt', 'w') as f:
             f.write(str(item_component_chart))
+        return parsed_items
+
+    def _parse_item_cards(self, parsed_items):
+        parsed_item_cards = item_cards.ItemCardParser(parsed_items=parsed_items, abilities=self.data['scripts']['abilities']).run()
+        json_utils.write(self.OUTPUT_DIR + '/json/item-cards.json', parsed_item_cards)
 
     def _parse_npcs(self, parsed_abilities):
         logger.trace('Parsing NPCs...')
@@ -254,7 +273,7 @@ class Parser:
             modifiers_data=self.data['scripts']['modifiers'],
             misc_data=self.data['scripts']['misc'],
             localizations=self.localizations[self.language],
-            parsed_abilities=parsed_abilities,
+            abilities_data=self.data['scripts']['abilities'],
         ).run()
 
         json_utils.write(self.OUTPUT_DIR + '/json/npc-data.json', json_utils.sort_dict(parsed_npcs))
@@ -265,3 +284,28 @@ class Parser:
 
         json_utils.write(self.OUTPUT_DIR + '/json/attribute-data.json', parsed_attributes)
         json_utils.write(self.OUTPUT_DIR + '/json/stat-infobox-order.json', attribute_orders)
+
+    def _parse_map(self):
+        if self.parse_map:
+            logger.trace('Parsing Map...')
+            map_vpk = os.path.join(self.game_dir, 'game/citadel/maps/dl_midtown.vpk')
+            map_data = game_map.GameMapParser(self.entity_helper_cmd, map_vpk).run()
+
+            json_utils.write(os.path.join(self.OUTPUT_DIR, 'json/midtown-metadata.json'), map_data['midtown']['metadata'])
+
+            os.makedirs(os.path.join(self.OUTPUT_DIR, 'assets'), exist_ok=True)
+            map_data['midtown']['plots']['golden_statues'].savefig(
+                os.path.join(self.OUTPUT_DIR, 'assets/golden-statues-map.png'), bbox_inches='tight', pad_inches=0
+            )
+            map_data['midtown']['plots']['crate'].savefig(os.path.join(self.OUTPUT_DIR, 'assets/crate-map.png'), bbox_inches='tight', pad_inches=0)
+            map_data['midtown']['plots']['shops'].savefig(os.path.join(self.OUTPUT_DIR, 'assets/shops-map.png'), bbox_inches='tight', pad_inches=0)
+
+    def _generate_resource_lookup(self, parsed_heroes, parsed_abilities, parsed_items):
+        logger.trace('Generating resource lookup...')
+        lookup = resource_lookup.ResourceLookupParser(
+            parsed_heroes,
+            parsed_abilities,
+            parsed_items,
+        ).run()
+
+        json_utils.write(self.OUTPUT_DIR + '/json/resource-lookup.json', lookup)

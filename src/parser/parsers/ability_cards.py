@@ -1,8 +1,18 @@
+from collections import defaultdict
+from typing import TypedDict
 from utils import num_utils
 import utils.string_utils as string_utils
 from loguru import logger
 
-SUPPORTED_LANGS = ['english', 'russian']
+SUPPORTED_LANGS = ['english']
+
+
+class ParsedProp(TypedDict):
+    key: str | None
+    requires_upgrade: bool
+    status_effect_key: str | None
+    status_effect: str | None
+    show_prop: bool
 
 
 class AbilityCardsParser:
@@ -118,10 +128,6 @@ class AbilityCardsParser:
         # track used attributes to avoid duplicate values in other categories
         self.used_attributes = ['Key', 'Name', 'Upgrades']
         for index, info_section in enumerate(info_sections):
-            # skip any UI that requires an upgraded ability to display it
-            if info_section.get('m_strAbilityPropertyUpgradeRequired') not in [None, '']:
-                continue
-
             for key in info_section:
                 if key not in handled_keys:
                     raise Exception(f'Unhandled key in info section {key}')
@@ -129,9 +135,20 @@ class AbilityCardsParser:
             # Each info section consists of some combination of
             # title, description, main properties, and alternate properties
             parsed_info_section = {
-                'Main': None,
-                'Alt': None,
+                'Main': {},
+                'Alt': [],
             }
+
+            # Some info boxes should only display when a certain attribute has been upgraded
+            # For simplicity, this is stored as the upgrade index
+            required_prop = info_section.get('m_strAbilityPropertyUpgradeRequired')
+            if required_prop not in ['', None]:
+                for upgr_index, upgrade in enumerate(self.ability['Upgrades']):
+                    if upgrade.get(required_prop) is not None:
+                        parsed_info_section['RequiresUpgradeIndex'] = upgr_index
+                        break
+                if parsed_info_section.get('RequiresUpgradeIndex') is None:
+                    logger.warning(f'No upgrade found for required property {required_prop}')
 
             desc_key = info_section.get('m_strLocString')
             if desc_key is not None and desc_key != '':
@@ -215,8 +232,8 @@ class AbilityCardsParser:
                     },
                 )
 
-                if 'status_effect' in parsed_prop:
-                    prop_object['StatusEffect'] = parsed_prop.get('status_effect')
+                if parsed_prop['status_effect']:
+                    prop_object['StatusEffect'] = parsed_prop['status_effect']
 
                 attr_value = self.ability[attr_key]
                 if isinstance(attr_value, dict):
@@ -235,16 +252,15 @@ class AbilityCardsParser:
         return main_block
 
     def _parse_ability_prop(self, ability_prop):
-        attribute = {'key': None, 'requires_upgrade': False}
+        attribute: ParsedProp = {'key': None, 'requires_upgrade': False, 'status_effect_key': None, 'status_effect': None, 'show_prop': False}
 
         for attr, value in ability_prop.items():
             match attr:
                 case 'm_strStatusEffectValue':
-                    attribute['key'] = value
+                    attribute['status_effect_key'] = value
 
                 case 'm_strImportantProperty':
-                    if attribute['key'] is None:
-                        attribute['key'] = value
+                    attribute['key'] = value
                     if value.startswith('StatusEffect'):
                         attribute['status_effect'] = value.replace('StatusEffect', '')
 
@@ -252,11 +268,14 @@ class AbilityCardsParser:
                     attribute['requires_upgrade'] = value
 
                 case 'm_bShowPropertyValue':
-                    # this has no use at the moment, as we want to always show the prop value
+                    attribute['show_prop'] = value
                     continue
 
                 case _:
                     logger.error('Unhandled property', attr)
+
+        if attribute['status_effect_key'] and attribute['show_prop']:
+            attribute['key'] = attribute['status_effect_key']
 
         return attribute
 
@@ -284,7 +303,6 @@ class AbilityCardsParser:
             alt_block.append(prop_object)
 
             self.used_attributes.append(prop)
-
         return alt_block
 
     def _parse_rest_of_data(self):
@@ -331,6 +349,7 @@ class AbilityCardsParser:
             # These props are directly referenced and should live on the top level
             if prop in [
                 'AbilityCharges',
+                'AbilityChannelTime',
                 'AbilityCooldownBetweenCharge',
                 'AbilityCooldown',
                 'AbilityCastDelay',
@@ -387,8 +406,15 @@ class AbilityCardsParser:
         return cleared_data
 
     def _parse_upgrades(self):
+        """Parse ability upgrades, filtering out internal properties when canonical variant exists."""
         parsed_upgrades = []
+        raw_ability = self._get_raw_ability()
+        raw_props = raw_ability.get('m_mapAbilityProperties', {})
+
         for index, upgrade in enumerate(self.ability['Upgrades']):
+            # Remove internal duplicate properties (e.g., LaunchWindowCooldown when AbilityCooldown exists)
+            upgrade = self._deduplicate_upgrade_props(upgrade, raw_props)
+
             # Description key includes t1, t2, and t3 denoting the upgrade tier
             desc_key = f'{self.ability["Key"]}_t{index+1}_desc'
 
@@ -407,6 +433,45 @@ class AbilityCardsParser:
             parsed_upgrades.append(upgrade)
 
         return parsed_upgrades
+
+    def _deduplicate_upgrade_props(self, upgrade, raw_props):
+        """
+        Remove internal properties from an upgrade when a canonical variant exists.
+
+        Uses m_bCanSetTokenOverride to identify canonical (displayed) vs internal properties.
+        When two properties have the same bonus value and CSS class, and one is marked
+        as canonical (m_bCanSetTokenOverride=True), remove the internal one.
+        """
+        if not upgrade:
+            return upgrade
+
+        # Build lookup of (bonus_value, css_class) -> [prop_names]
+        groups = defaultdict(list)
+
+        for prop_name, bonus_value in upgrade.items():
+            # Skip metadata keys
+            if prop_name in {'DescKey', 'm_vecPropertyUpgrades'}:
+                continue
+
+            raw = raw_props.get(prop_name, {})
+            css_class = raw.get('m_strCSSClass', '')
+            # Group by (value, css_class) - properties modifying the same thing the same way
+            # Convert bonus_value to string for hashing (handles dict values from scale data)
+            bonus_key = str(bonus_value) if not isinstance(bonus_value, (str, int, float)) else bonus_value
+            groups[(bonus_key, css_class)].append(prop_name)
+
+        props_to_remove = set()
+        for prop_names in groups.values():
+            if len(prop_names) < 2:
+                continue
+
+            canonical = [p for p in prop_names if raw_props.get(p, {}).get('m_bCanSetTokenOverride') is True]
+            internal = [p for p in prop_names if raw_props.get(p, {}).get('m_bCanSetTokenOverride') is not True]
+
+            if canonical and internal:
+                props_to_remove.update(internal)
+
+        return {k: v for k, v in upgrade.items() if k not in props_to_remove}
 
     def _get_uom(self, attr, value):
         """
@@ -477,7 +542,12 @@ class AbilityCardsParser:
         for attr, value in data.items():
             if isinstance(value, dict) and 'Scale' in value:
                 format_data[attr] = value['Value']
-                format_data[f'{attr}_scale'] = value['Scale']['Value']
+
+                # if there are multiple scales, use the first one as it is usually the more relevant one - eg. spirit power
+                if isinstance(value['Scale'], list):
+                    format_data[f'{attr}_scale'] = value['Scale'][0]['Value']
+                else:
+                    format_data[f'{attr}_scale'] = value['Scale']['Value']
 
         # required variables to insert into the description
         format_vars = (

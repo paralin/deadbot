@@ -6,7 +6,9 @@ DATA_PAGE_FILE_MAP = {
     'AttributeData.json': 'json/attribute-data.json',
     'GenericData.json': 'json/generic-data.json',
     'HeroData.json': 'json/hero-data.json',
+    'HeroMeaningfulStats.json': 'json/hero-meaningful-stats.json',
     'ItemData.json': 'json/item-data.json',
+    'ItemCards.json': 'json/item-cards.json',
     'NpcData.json': 'json/npc-data.json',
     'Lang bg.json': 'localizations/bulgarian.json',
     'Lang cs.json': 'localizations/czech.json',
@@ -39,6 +41,8 @@ DATA_PAGE_FILE_MAP = {
     'Lang zh-hant.json': 'localizations/tchinese.json',
     'SoulUnlockData.json': 'json/soul-unlock-data.json',
     'StatInfoboxOrder.json': 'json/stat-infobox-order.json',
+    'ResourceLookup.json': 'json/resource-lookup.json',
+    'MidtownMetadata.json': 'json/midtown-metadata.json',
 }
 
 # Ignore these pages as they are not automated
